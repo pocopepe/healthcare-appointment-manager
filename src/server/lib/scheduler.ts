@@ -42,10 +42,15 @@ async function queueMedicationReminders(db: Db) {
     ),
   });
 
+  const now = new Date();
   let queued = 0;
   for (const reminder of active) {
-    const endDate = addDays(reminder.startDate, reminder.durationDays);
+    // A 5-day course covers the start date plus four more, so the last day
+    // is startDate + (durationDays - 1) — not + durationDays, which would
+    // keep reminding the patient for one extra day.
+    const endDate = addDays(reminder.startDate, Math.max(reminder.durationDays - 1, 0));
     if (today > endDate) continue;
+    if (reminder.timesPerDay < 1) continue;
 
     const appt = await db.query.appointments.findFirst({
       where: eq(appointments.id, reminder.appointmentId),
@@ -61,6 +66,10 @@ async function queueMedicationReminders(db: Db) {
     for (let i = 0; i < reminder.timesPerDay; i++) {
       const hour = Math.floor(windowStart + step * i);
       const scheduledFor = new Date(`${today}T${String(hour).padStart(2, "0")}:00:00.000Z`);
+      // Don't queue dose times that have already passed. A prescription
+      // written at 17:00 would otherwise dump that morning's and midday's
+      // reminders into the patient's inbox the moment the next tick runs.
+      if (scheduledFor <= now) continue;
       await queueEmail(db, {
         userId: appt.patientId,
         appointmentId: appt.id,
