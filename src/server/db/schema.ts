@@ -27,7 +27,9 @@ export const users = sqliteTable(
     phone: text("phone"),
     ...timestamps,
   },
-  (table) => [uniqueIndex("users_email_idx").on(table.email)],
+  (table) => ({
+    emailIdx: uniqueIndex("users_email_idx").on(table.email),
+  }),
 );
 
 // One row per doctor, extending a `users` row with role = 'doctor'.
@@ -55,7 +57,9 @@ export const doctorAvailability = sqliteTable(
     startTime: text("start_time").notNull(), // "09:00"
     endTime: text("end_time").notNull(), // "17:00"
   },
-  (table) => [index("doctor_availability_doctor_idx").on(table.doctorId)],
+  (table) => ({
+    doctorIdx: index("doctor_availability_doctor_idx").on(table.doctorId),
+  }),
 );
 
 export const doctorLeaves = sqliteTable(
@@ -69,12 +73,12 @@ export const doctorLeaves = sqliteTable(
     reason: text("reason"),
     ...timestamps,
   },
-  (table) => [
-    uniqueIndex("doctor_leaves_doctor_date_idx").on(
+  (table) => ({
+    doctorDateIdx: uniqueIndex("doctor_leaves_doctor_date_idx").on(
       table.doctorId,
       table.date,
     ),
-  ],
+  }),
 );
 
 export const appointments = sqliteTable(
@@ -118,15 +122,15 @@ export const appointments = sqliteTable(
     cancelledReason: text("cancelled_reason"),
     ...timestamps,
   },
-  (table) => [
+  (table) => ({
     // A doctor can't hold/confirm two appointments for the same slot at once.
     // Cancelled appointments free the slot up again, so they're excluded.
-    uniqueIndex("appointments_doctor_slot_active_idx")
+    doctorSlotActiveIdx: uniqueIndex("appointments_doctor_slot_active_idx")
       .on(table.doctorId, table.slotStart)
       .where(sql`${table.status} != 'cancelled'`),
-    index("appointments_patient_idx").on(table.patientId),
-    index("appointments_doctor_idx").on(table.doctorId),
-  ],
+    patientIdx: index("appointments_patient_idx").on(table.patientId),
+    doctorIdx: index("appointments_doctor_idx").on(table.doctorId),
+  }),
 );
 
 export const medicationReminders = sqliteTable(
@@ -146,9 +150,11 @@ export const medicationReminders = sqliteTable(
     lastQueuedDate: text("last_queued_date"),
     ...timestamps,
   },
-  (table) => [
-    index("medication_reminders_appointment_idx").on(table.appointmentId),
-  ],
+  (table) => ({
+    appointmentIdx: index("medication_reminders_appointment_idx").on(
+      table.appointmentId,
+    ),
+  }),
 );
 
 // Every outbound email and reminder goes through this outbox so delivery is
@@ -185,12 +191,12 @@ export const notificationOutbox = sqliteTable(
     sentAt: text("sent_at"),
     ...timestamps,
   },
-  (table) => [
-    index("notification_outbox_status_idx").on(
+  (table) => ({
+    statusIdx: index("notification_outbox_status_idx").on(
       table.status,
       table.scheduledFor,
     ),
-  ],
+  }),
 );
 
 export const calendarConnections = sqliteTable(
@@ -221,10 +227,10 @@ export const calendarEvents = sqliteTable(
     googleEventId: text("google_event_id").notNull(),
     ...timestamps,
   },
-  (table) => [
-    uniqueIndex("calendar_events_appointment_user_idx").on(
+  (table) => ({
+    appointmentUserIdx: uniqueIndex("calendar_events_appointment_user_idx").on(
       table.appointmentId,
       table.userId,
     ),
-  ],
+  }),
 );

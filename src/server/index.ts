@@ -31,7 +31,7 @@ app.onError((err, c) => {
 
 export default {
   fetch: app.fetch,
-  scheduled: async (_event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) => {
+  scheduled: async (_event: ScheduledController, env: Bindings, ctx: ExecutionContext) => {
     const db = createDb(env.DB);
     ctx.waitUntil(runScheduledTasks(env, db));
   },
