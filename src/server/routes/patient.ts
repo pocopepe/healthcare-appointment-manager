@@ -4,7 +4,13 @@ import type { AppEnv } from "../env";
 import { createDb } from "../db/client";
 import { doctorProfiles, appointments, users } from "../db/schema";
 import { authenticate, requireRole } from "../middleware/auth";
-import { getAvailableSlots, isHoldExpired, computeHoldExpiry } from "../lib/slots";
+import {
+  getAvailableSlots,
+  isHoldExpired,
+  computeHoldExpiry,
+  isSlotOnSchedule,
+  findOverlappingAppointment,
+} from "../lib/slots";
 import { generatePreVisitSummary } from "../lib/llm";
 import { queueEmail } from "../lib/email";
 import { upsertCalendarEvent } from "../lib/calendar";
@@ -76,7 +82,30 @@ patient.post("/appointments/hold", async (c) => {
       .where(eq(appointments.id, stale.id));
   }
 
+  // Never trust the client's start/end: it must be a slot this doctor
+  // actually offers (working hours, slot grid, not a leave day, in the
+  // future), otherwise a hand-crafted request could book 3am or a 10-hour
+  // appointment.
+  if (!(await isSlotOnSchedule(db, doctorId, slotStart, slotEnd))) {
+    return c.json(
+      { error: "That slot is not on this doctor's schedule. Please pick an offered slot." },
+      400,
+    );
+  }
+
+  // Grid slots can't overlap each other, but a doctor's slot duration can be
+  // changed after bookings exist, which shifts the grid over appointments
+  // made under the old one. The unique index won't catch that (different
+  // start time), so check the interval explicitly. This is a best-effort
+  // read: two simultaneous requests can both pass it, and the unique index
+  // below stays the last line of defence for the identical-slot case.
+  const overlap = await findOverlappingAppointment(db, doctorId, slotStart, slotEnd);
+  if (overlap) {
+    return c.json({ error: "This slot was just taken. Please pick another." }, 409);
+  }
+
   const id = crypto.randomUUID();
+  const holdExpiresAt = computeHoldExpiry();
   try {
     await db.insert(appointments).values({
       id,
@@ -85,7 +114,7 @@ patient.post("/appointments/hold", async (c) => {
       slotStart,
       slotEnd,
       status: "held",
-      holdExpiresAt: computeHoldExpiry(),
+      holdExpiresAt,
     });
   } catch (err) {
     if (String(err).includes("UNIQUE constraint failed")) {
@@ -94,7 +123,7 @@ patient.post("/appointments/hold", async (c) => {
     throw err;
   }
 
-  return c.json({ id, holdExpiresAt: computeHoldExpiry() }, 201);
+  return c.json({ id, holdExpiresAt }, 201);
 });
 
 // Step 2: submit symptoms and confirm the held slot into a real booking.
