@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, and, gte, lt, ne } from "drizzle-orm";
+import { eq, and, gte, lt, inArray } from "drizzle-orm";
 import type { AppEnv } from "../env";
 import { createDb } from "../db/client";
 import {
@@ -172,7 +172,9 @@ admin.post("/doctors/:id/leave", async (c) => {
   const affected = await db.query.appointments.findMany({
     where: and(
       eq(appointments.doctorId, doctorId),
-      ne(appointments.status, "cancelled"),
+      // Only held/confirmed bookings are disrupted by a leave day —
+      // completed visits already happened and shouldn't be touched.
+      inArray(appointments.status, ["held", "confirmed"]),
       gte(appointments.slotStart, dayStart),
       lt(appointments.slotStart, dayEnd),
     ),
