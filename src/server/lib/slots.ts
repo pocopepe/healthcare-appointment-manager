@@ -14,10 +14,14 @@ function timeToMinutes(hhmm: string): number {
   return h * 60 + m;
 }
 
-function minutesToHhmm(total: number): string {
-  const h = String(Math.floor(total / 60)).padStart(2, "0");
-  const m = String(total % 60).padStart(2, "0");
-  return `${h}:${m}`;
+// Minutes-from-midnight on `date` as a canonical UTC timestamp. Goes through
+// Date so that a window ending at 24:00 normalises to 00:00 the next day
+// instead of producing "...T24:00:00.000Z", which would break the string
+// comparisons used for overlap detection.
+function isoAtMinutes(date: string, total: number): string {
+  return new Date(
+    new Date(`${date}T00:00:00.000Z`).getTime() + total * 60_000,
+  ).toISOString();
 }
 
 // day boundaries in UTC for a given "YYYY-MM-DD" calendar date
@@ -65,8 +69,8 @@ export async function getScheduleSlots(
     const startMin = timeToMinutes(window.startTime);
     const endMin = timeToMinutes(window.endTime);
     for (let m = startMin; m + duration <= endMin; m += duration) {
-      const startIso = `${date}T${minutesToHhmm(m)}:00.000Z`;
-      const endIso = `${date}T${minutesToHhmm(m + duration)}:00.000Z`;
+      const startIso = isoAtMinutes(date, m);
+      const endIso = isoAtMinutes(date, m + duration);
       if (new Date(startIso) > now) {
         slots.push({ start: startIso, end: endIso });
       }
