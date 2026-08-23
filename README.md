@@ -69,7 +69,7 @@ Log in as the seeded admin to create doctor profiles (specialisation, working ho
 npm test
 ```
 
-Runs against a real (isolated, in-memory) D1 instance via `@cloudflare/vitest-pool-workers` — no mocking of the database or HTTP layer. Covers password hashing, slot generation, auth, the double-booking race, and the full hold → confirm → visit → leave-conflict flow.
+Runs against a real (isolated, in-memory) D1 instance via `@cloudflare/vitest-pool-workers` — no mocking of the database or HTTP layer. Covers password hashing, slot generation, auth, the double-booking race, slot validation (off-grid/out-of-hours/leave-day/past bookings), medication reminder scheduling, and the full hold → confirm → visit → leave-conflict flow.
 
 ### Deploying
 
@@ -137,7 +137,7 @@ Defined in `src/server/db/schema.ts` (Drizzle, SQLite dialect). Summary:
 | `calendar_connections` | Per-user Google OAuth tokens |
 | `calendar_events` | Maps an (appointment, user) pair to its Google Calendar event id |
 
-The load-bearing constraint: `appointments` has a **partial unique index** on `(doctor_id, slot_start)` where `status != 'cancelled'`. See `docs/SYSTEM_DESIGN.md` for why this — not application-level locking — is what actually prevents double-booking.
+The load-bearing constraint: `appointments` has a **partial unique index** on `(doctor_id, slot_start)` where `status != 'cancelled'`, which makes concurrent booking of the same slot atomically impossible. Because that index only catches an identical start time, the booking endpoint additionally validates the requested slot against the doctor's schedule grid and checks for interval overlap — see `docs/SYSTEM_DESIGN.md`.
 
 ## API docs
 
