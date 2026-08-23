@@ -1,18 +1,19 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { ApiError } from "../lib/api";
 
 export function Login() {
   const { login, user } = useAuth();
-  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Redirect declaratively — calling navigate() during render makes React
+  // update the router mid-render, which it warns about.
   if (user) {
-    navigate(`/${user.role}`, { replace: true });
+    return <Navigate to={`/${user.role}`} replace />;
   }
 
   async function onSubmit(e: FormEvent) {
