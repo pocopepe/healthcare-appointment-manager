@@ -4,8 +4,4 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 
 export default defineConfig({
   plugins: [react(), cloudflare()],
-  root: ".",
-  build: {
-    outDir: "dist/client",
-  },
 });

@@ -11,7 +11,9 @@
     "cf-typegen": "wrangler types",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply healthcare-appointment-manager-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply healthcare-appointment-manager-db --remote"
+    "db:migrate:remote": "wrangler d1 migrations apply healthcare-appointment-manager-db --remote",
+    "db:seed-admin:local": "node scripts/seed-admin.mjs --local",
+    "db:seed-admin:remote": "node scripts/seed-admin.mjs --remote"
   },
   "dependencies": {
     "hono": "^4.6.14",
@@ -21,7 +23,7 @@
     "react-router-dom": "^6.28.0"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^0.1.9",
+    "@cloudflare/vite-plugin": "^1.53.1",
     "@cloudflare/workers-types": "^5.0.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
