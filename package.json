@@ -13,7 +13,9 @@
     "db:migrate:local": "wrangler d1 migrations apply healthcare-appointment-manager-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply healthcare-appointment-manager-db --remote",
     "db:seed-admin:local": "node scripts/seed-admin.mjs --local",
-    "db:seed-admin:remote": "node scripts/seed-admin.mjs --remote"
+    "db:seed-admin:remote": "node scripts/seed-admin.mjs --remote",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
     "hono": "^4.6.14",
@@ -31,6 +33,9 @@
     "drizzle-kit": "^0.28.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.0",
+    "vitest": "^4.1.0",
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@types/node": "^22.10.0",
     "wrangler": "^4.0.0"
   }
 }
