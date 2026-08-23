@@ -141,6 +141,9 @@ export const medicationReminders = sqliteTable(
     timesPerDay: integer("times_per_day").notNull(),
     startDate: text("start_date").notNull(), // "YYYY-MM-DD"
     durationDays: integer("duration_days").notNull(),
+    // Last calendar date this reminder was queued for, so the cron tick
+    // (every 15 min) doesn't queue duplicate reminders for the same day.
+    lastQueuedDate: text("last_queued_date"),
     ...timestamps,
   },
   (table) => [
