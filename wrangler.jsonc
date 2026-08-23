@@ -14,7 +14,7 @@
     {
       "binding": "DB",
       "database_name": "healthcare-appointment-manager-db",
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "database_id": "3a8e7f7c-2bd7-4522-be70-cb3a2b110e7e",
       "migrations_dir": "migrations"
     }
   ],
@@ -22,6 +22,6 @@
     "crons": ["*/15 * * * *"]
   },
   "vars": {
-    "APP_BASE_URL": "http://localhost:5173"
+    "APP_BASE_URL": "https://healthcare-appointment-manager.avijusanjai.workers.dev"
   }
 }
