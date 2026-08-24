@@ -14,6 +14,32 @@ A clinic appointment platform with separate patient, doctor, and admin portals. 
 
 Built on Cloudflare Workers: a [Hono](https://hono.dev) API and a React (Vite) frontend deployed as a single Worker, backed by D1 (Cloudflare's SQLite).
 
+## What's implemented
+
+**Three portals, one deployment.** You land on the dashboard matching your role.
+
+*Patients* register themselves, search doctors by specialisation, hold a slot for five minutes while describing symptoms, then confirm. They can reschedule or cancel, and afterwards read a plain-language summary of the visit with their prescription.
+
+*Doctors* see each appointment already triaged — an AI pre-visit summary grading urgency and suggesting three questions to ask — then record clinical notes and a prescription, which completes the visit and schedules medication reminders.
+
+*Admins* create and edit doctor profiles (specialisation, weekly working hours, slot duration), mark leave days — which cancels affected bookings and notifies everyone — and inspect the notification outbox and AI usage.
+
+Running underneath: a cron job every 15 minutes that releases abandoned slot holds, queues medication and appointment reminders, and retries failed emails; Google Calendar sync over OAuth 2.0 that creates, moves and deletes events as bookings change; and an LLM layer that degrades to a clear message rather than breaking anything when it's unavailable.
+
+## Engineering notes
+
+The parts that took the most thought, in case they're the interesting bit:
+
+**Double-booking is enforced by the database, not by application logic.** A partial unique index on `(doctor_id, slot_start)` makes two concurrent bookings of one slot atomically impossible. But that index only catches an *identical* start time — since the endpoint receives start/end from the client, a request for 09:15–09:45 against an existing 09:00–09:30 booking slips straight past it. So requested slots are also validated against the doctor's real schedule grid, plus an interval-overlap check for the case where an admin widens slot duration over existing bookings. Full reasoning in [`docs/SYSTEM_DESIGN.md`](docs/SYSTEM_DESIGN.md).
+
+**The LLM is not trusted with dosages.** Handed only a doctor's shorthand (`Rx ibuprofen 400mg TDS 5/7`), the model expanded it into *"4 times a day, 5 days a week (Monday to Friday)"* — wrong frequency and wrong duration. The prescription is now passed as structured data with explicit rules against altering or inventing dosing, and the generated prose carries a disclaimer pointing at the structured prescription as the source of truth.
+
+**AI spend is capped by the app itself.** Workers AI includes 10,000 Neurons/day free; the app counts its own calls per UTC day and refuses to call the model past a configurable limit, so it stops well short of the allowance rather than failing hard or billing. `LLM_DAILY_LIMIT=0` is a kill switch, which the test suite uses so running tests never spends anything.
+
+**Notifications are never sent inline.** Everything goes through an outbox with retry, attempt caps and recorded errors, so a provider outage delays mail rather than losing it. Recipients on reserved domains (`.test`, `.example`) are deliberately skipped — the demo accounts use `@demo.test`, and handing those to a provider would guarantee hard bounces.
+
+**Tests run against the real runtime.** 40 tests via `@cloudflare/vitest-pool-workers` execute in workerd against a real D1 instance — no mocked database, no mocked HTTP. Several encode regressions found while building: the off-grid overlap, a leave day wiping completed visits, and reminders firing a day long and in batches.
+
 ## Stack
 
 - **API:** Hono, running on Cloudflare Workers
@@ -38,9 +64,11 @@ src/server/         Hono API (Worker)
   routes/             auth.ts, patient.ts, doctor.ts, admin.ts, calendar.ts
   middleware/auth.ts  JWT auth + role guard
   index.ts            Worker entry (fetch + scheduled handlers)
-src/client/          React frontend (patient/doctor/admin dashboards)
+src/client/          React frontend
+  pages/              Landing, Login, Register, Settings + one dashboard per role
+  lib/                api client, auth context
 migrations/          Drizzle-generated D1 migrations
-scripts/seed-admin.mjs  Bootstraps the first admin account
+scripts/             seed-admin.mjs (first admin), seed-demo.mjs (demo data)
 test/                Vitest suite (unit + integration, against real D1)
 docs/SYSTEM_DESIGN.md  Design write-up (double-booking, leave conflicts, etc.)
 ```
