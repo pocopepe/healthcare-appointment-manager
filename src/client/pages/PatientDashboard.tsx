@@ -25,6 +25,7 @@ type Appointment = {
     suggestedQuestions: string[];
   } | null;
   aiPostVisitSummary: string | null;
+  aiStatus: string | null;
   prescription: Array<{ medication: string; dosage: string; timesPerDay: number; durationDays: number }> | null;
 };
 
@@ -224,6 +225,9 @@ export function PatientDashboard() {
               </div>
               {a.aiPreVisitSummary && (
                 <p className="muted">Urgency: {a.aiPreVisitSummary.urgency} — {a.aiPreVisitSummary.chiefComplaint}</p>
+              )}
+              {!a.aiPreVisitSummary && a.aiStatus === "daily_limit" && (
+                <p className="muted">AI summary unavailable — today's summary limit was reached.</p>
               )}
               {a.status === "completed" && a.aiPostVisitSummary && (
                 <div className="post-visit">

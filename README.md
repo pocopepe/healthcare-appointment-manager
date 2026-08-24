@@ -20,7 +20,7 @@ Built on Cloudflare Workers: a [Hono](https://hono.dev) API and a React (Vite) f
 - **Frontend:** React + React Router, built with Vite (`@cloudflare/vite-plugin` bundles both into one deployable Worker)
 - **Database:** Cloudflare D1 (SQLite), schema managed with Drizzle ORM
 - **Auth:** JWT (via `hono/jwt`) + PBKDF2 password hashing (Web Crypto — no bcrypt dependency, since native bindings don't run on Workers)
-- **LLM:** provider-swappable (Anthropic or OpenAI), called directly over `fetch` — no SDK
+- **LLM:** Cloudflare Workers AI (`@cf/meta/llama-3.1-8b-instruct-fp8`) by default — no API key needed; Anthropic/OpenAI swappable via `LLM_PROVIDER`
 - **Email:** SendGrid HTTP API, called over `fetch`
 - **Calendar:** Google Calendar API v3 + OAuth 2.0, called over `fetch`
 - **Background jobs:** Cloudflare Cron Triggers (every 15 minutes)
@@ -135,8 +135,24 @@ Exactly as specified in the assignment brief, with the pre-visit prompt addition
 >
 > Symptoms: `<symptoms>`
 
-**Post-visit summary** (`generatePostVisitSummary`):
-> Convert these clinical notes into a patient-friendly summary with a medication schedule and follow-up steps. Write in plain, reassuring language a patient with no medical background can follow. Clinical notes: `<notes>`
+**Post-visit summary** (`generatePostVisitSummary`) — the brief's prompt, plus an authoritative medication block and explicit constraints:
+> Convert these clinical notes into a patient-friendly summary with a medication schedule and follow-up steps. Write in plain, reassuring language a patient with no medical background can follow.
+>
+> Rules you must follow exactly:
+> - Reproduce the medication schedule below word for word in meaning. Do not change any dose, frequency, or number of days.
+> - Do not invent medicines, doses, schedules, tests, or advice that are not stated below.
+> - Do not describe the course in weeks or weekdays. It runs for a number of consecutive days.
+> - If something is unclear, tell the patient to ask their doctor rather than guessing.
+>
+> Medication schedule (authoritative): `<expanded from the structured prescription>`
+>
+> Clinical notes: `<notes>`
+
+Those constraints are not decoration. Handed only the doctor's shorthand (`Rx ibuprofen 400mg TDS 5/7`), an 8B model expanded it into *"4 times a day, 5 days a week (Monday to Friday)"* — wrong frequency and wrong duration. Passing the prescription as structured data and forbidding invention fixed it. The prose also carries a disclaimer pointing at the structured `prescription` field as the real source of truth, since a generated paraphrase should never be what a patient doses from.
+
+### Cost control
+
+Workers AI includes 10,000 Neurons/day free, and a summary costs roughly 15–25. The app counts its own calls per UTC day in `llm_usage` and refuses to call the model past `LLM_DAILY_LIMIT` (default 200), so it stops well short of the allowance rather than failing hard (free plan) or billing (paid plan). `GET /api/admin/llm-usage` reports today's spend. Setting `LLM_DAILY_LIMIT=0` disables LLM calls entirely — the test suite uses this so running tests never spends Neurons.
 
 Both calls go through a provider-agnostic `callLLM()` — set `LLM_PROVIDER` to `anthropic` or `openai`. A missing key, non-2xx response, network error, or unparseable JSON all resolve to `null` rather than throwing; the appointment is still booked/completed with the summary marked unavailable (see `docs/SYSTEM_DESIGN.md`).
 

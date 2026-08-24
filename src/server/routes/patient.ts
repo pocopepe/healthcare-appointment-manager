@@ -150,14 +150,15 @@ patient.post("/appointments/:id/confirm", async (c) => {
     return c.json({ error: "Your hold on this slot expired. Please rebook." }, 410);
   }
 
-  const preVisitSummary = await generatePreVisitSummary(c.env, body.symptoms);
+  const summary = await generatePreVisitSummary(c.env, db, body.symptoms);
 
   await db
     .update(appointments)
     .set({
       status: "confirmed",
       symptomsText: body.symptoms,
-      aiPreVisitSummary: preVisitSummary,
+      aiPreVisitSummary: summary.ok ? summary.value : null,
+      aiStatus: summary.ok ? null : summary.reason,
       holdExpiresAt: null,
     })
     .where(eq(appointments.id, id));
@@ -204,7 +205,12 @@ patient.post("/appointments/:id/confirm", async (c) => {
     });
   }
 
-  return c.json({ id, status: "confirmed", aiPreVisitSummary: preVisitSummary });
+  return c.json({
+    id,
+    status: "confirmed",
+    aiPreVisitSummary: summary.ok ? summary.value : null,
+    aiStatus: summary.ok ? null : summary.reason,
+  });
 });
 
 patient.get("/appointments/mine", async (c) => {

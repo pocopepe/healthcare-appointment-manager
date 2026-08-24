@@ -9,7 +9,7 @@ import {
   medicationReminders,
 } from "../db/schema";
 import { authenticate, requireRole } from "../middleware/auth";
-import { generatePostVisitSummary } from "../lib/llm";
+import { generatePostVisitSummary, explainUnavailable } from "../lib/llm";
 import { queueEmail } from "../lib/email";
 
 const doctor = new Hono<AppEnv>();
@@ -79,7 +79,14 @@ doctor.post("/appointments/:id/visit", async (c) => {
   }
 
   const prescription = body.prescription ?? [];
-  const postVisitSummary = await generatePostVisitSummary(c.env, body.notes);
+  const summary = await generatePostVisitSummary(c.env, db, body.notes, prescription);
+  // The post-visit summary is free text shown to the patient, so an
+  // unavailable one is stored as the explanation rather than left blank.
+  // AI-written prose is never the authoritative source for dosing — the
+  // structured `prescription` field is — so say so alongside it.
+  const postVisitSummary = summary.ok
+    ? `${summary.value}\n\n---\nThis summary was drafted automatically to help explain your visit. Always follow the prescription exactly as listed in your appointment record, and ask your doctor or pharmacist if anything differs or is unclear.`
+    : explainUnavailable(summary.reason);
 
   await db
     .update(appointments)
@@ -88,6 +95,7 @@ doctor.post("/appointments/:id/visit", async (c) => {
       postVisitNotes: body.notes,
       prescription,
       aiPostVisitSummary: postVisitSummary,
+      aiStatus: summary.ok ? null : summary.reason,
     })
     .where(eq(appointments.id, id));
 
@@ -109,12 +117,15 @@ doctor.post("/appointments/:id/visit", async (c) => {
     appointmentId: id,
     type: "booking_confirmation",
     subject: "Your visit summary is ready",
-    body:
-      postVisitSummary ??
-      "Your visit summary is ready in the patient portal. (AI summary generation was unavailable; your doctor's raw notes are attached to your record.)",
+    body: postVisitSummary,
   });
 
-  return c.json({ id, status: "completed", aiPostVisitSummary: postVisitSummary });
+  return c.json({
+    id,
+    status: "completed",
+    aiPostVisitSummary: postVisitSummary,
+    aiStatus: summary.ok ? null : summary.reason,
+  });
 });
 
 export default doctor;

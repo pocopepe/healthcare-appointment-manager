@@ -12,11 +12,28 @@ import {
 import { authenticate, requireRole } from "../middleware/auth";
 import { hashPassword } from "../lib/password";
 import { cancelAppointmentAndNotify } from "../lib/appointment-notifications";
+import { getUsageToday } from "../lib/llm";
 
 const admin = new Hono<AppEnv>();
 admin.use("*", authenticate, requireRole("admin"));
 
 type AvailabilityInput = { dayOfWeek: number; startTime: string; endTime: string };
+
+// Lets an admin see how much of today's self-imposed LLM budget is spent,
+// without digging through Cloudflare's dashboard.
+admin.get("/llm-usage", async (c) => {
+  const db = createDb(c.env.DB);
+  const used = await getUsageToday(db);
+  const limit = Number(c.env.LLM_DAILY_LIMIT) || 200;
+  return c.json({
+    date: new Date().toISOString().slice(0, 10),
+    provider: c.env.LLM_PROVIDER ?? "workers-ai",
+    used,
+    limit,
+    remaining: Math.max(limit - used, 0),
+    exhausted: used >= limit,
+  });
+});
 
 admin.get("/doctors", async (c) => {
   const db = createDb(c.env.DB);

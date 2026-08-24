@@ -14,6 +14,9 @@ export default defineConfig({
           // depends on a local .dev.vars file being present.
           JWT_SECRET: "test-secret-do-not-use-in-production",
           APP_BASE_URL: "http://localhost:5173",
+          // 0 disables LLM calls outright, so the suite never spends real
+          // Workers AI Neurons or depends on the network.
+          LLM_DAILY_LIMIT: "0",
           TEST_MIGRATIONS: migrations,
         },
       },

@@ -118,6 +118,9 @@ export const appointments = sqliteTable(
       }>
     >(),
     aiPostVisitSummary: text("ai_post_visit_summary"),
+    // Why an AI summary is missing, so the UI can explain itself instead of
+    // showing an unexplained blank: "daily_limit", "not_configured", "error".
+    aiStatus: text("ai_status"),
 
     cancelledReason: text("cancelled_reason"),
     ...timestamps,
@@ -198,6 +201,18 @@ export const notificationOutbox = sqliteTable(
     ),
   }),
 );
+
+// One row per UTC day, counting LLM calls so the app can stop itself well
+// before Cloudflare's free Workers AI allocation (10,000 Neurons/day) runs
+// out. Without this the app would either start failing with raw errors on
+// the free plan, or quietly accrue charges on the paid one.
+export const llmUsage = sqliteTable("llm_usage", {
+  date: text("date").primaryKey(), // "YYYY-MM-DD" (UTC)
+  requests: integer("requests").notNull().default(0),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(CURRENT_TIMESTAMP)`),
+});
 
 export const calendarConnections = sqliteTable(
   "calendar_connections",

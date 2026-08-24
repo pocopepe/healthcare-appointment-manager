@@ -5,7 +5,9 @@ export type Bindings = {
   APP_BASE_URL: string;
   JWT_SECRET: string;
 
-  LLM_PROVIDER?: "anthropic" | "openai";
+  AI: Ai;
+  LLM_PROVIDER?: "workers-ai" | "anthropic" | "openai";
+  LLM_DAILY_LIMIT?: string;
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;
 

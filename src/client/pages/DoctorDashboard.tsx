@@ -14,6 +14,7 @@ type Appointment = {
     suggestedQuestions: string[];
   } | null;
   postVisitNotes: string | null;
+  aiStatus: string | null;
 };
 
 type PrescriptionRow = { medication: string; dosage: string; timesPerDay: number; durationDays: number };
@@ -139,6 +140,14 @@ export function DoctorDashboard() {
                     </button>
                   )}
                 </div>
+                {!a.aiPreVisitSummary && a.aiStatus && (
+                  <p className="muted">
+                    {a.aiStatus === "daily_limit"
+                      ? "AI pre-visit summary unavailable — today's automated summary limit was reached. The patient's own description is below."
+                      : "AI pre-visit summary unavailable. The patient's own description is below."}
+                    {a.symptomsText ? ` Symptoms: ${a.symptomsText}` : ""}
+                  </p>
+                )}
                 {a.aiPreVisitSummary && (
                   <div className="pre-visit">
                     <p>
