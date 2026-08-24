@@ -1,13 +1,34 @@
 import { Hono } from "hono";
+import { eq } from "drizzle-orm";
 import type { AppEnv } from "../env";
 import { createDb } from "../db/client";
+import { calendarConnections, calendarEvents } from "../db/schema";
 import { authenticate } from "../middleware/auth";
 import { getAuthUrl, exchangeCodeForTokens, isCalendarConfigured } from "../lib/calendar";
 
 const calendar = new Hono<AppEnv>();
 
+// `configured` is about the deployment (are Google credentials present),
+// `connected` is about this particular user (have they granted access).
 calendar.get("/status", authenticate, async (c) => {
-  return c.json({ configured: isCalendarConfigured(c.env) });
+  const db = createDb(c.env.DB);
+  const connection = await db.query.calendarConnections.findFirst({
+    where: eq(calendarConnections.userId, c.get("userId")),
+  });
+  return c.json({
+    configured: isCalendarConfigured(c.env),
+    connected: Boolean(connection),
+  });
+});
+
+calendar.delete("/connection", authenticate, async (c) => {
+  const db = createDb(c.env.DB);
+  const userId = c.get("userId");
+  // Drop the event mappings too: without the token they can't be updated or
+  // deleted in Google any more, so keeping them would strand stale rows.
+  await db.delete(calendarEvents).where(eq(calendarEvents.userId, userId));
+  await db.delete(calendarConnections).where(eq(calendarConnections.userId, userId));
+  return c.json({ connected: false });
 });
 
 // Returns the Google consent URL for the logged-in user. The frontend

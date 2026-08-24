@@ -4,6 +4,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { Landing } from "./pages/Landing";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
+import { Settings } from "./pages/Settings";
 import { PatientDashboard } from "./pages/PatientDashboard";
 import { DoctorDashboard } from "./pages/DoctorDashboard";
 import { AdminDashboard } from "./pages/AdminDashboard";
@@ -16,6 +17,7 @@ export function App() {
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/settings" element={<Settings />} />
           <Route
             path="/patient"
             element={

@@ -122,7 +122,10 @@ Calendar sync is optional and off by default. To enable it:
 2. Configure an OAuth consent screen (External is fine for testing; add your test Google account as a test user).
 3. Create an **OAuth 2.0 Client ID** (type: Web application). Add an authorized redirect URI matching `GOOGLE_REDIRECT_URI` — for local dev that's `http://localhost:5173/api/calendar/oauth/callback`.
 4. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_REDIRECT_URI` in `.dev.vars` (or as Worker secrets in production).
-5. From a logged-in patient or doctor session, call `GET /api/calendar/oauth/start` — it returns a Google consent URL to redirect the browser to. On approval, Google redirects to the callback route, which stores the refresh token and starts syncing that user's bookings.
+5. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` as Worker secrets (`wrangler secret put <NAME>`), and `GOOGLE_REDIRECT_URI` as a var in `wrangler.jsonc` — it must match the registered redirect URI character for character or Google returns `redirect_uri_mismatch`.
+6. Log in and open **Settings → Connect Google Calendar**. That calls `GET /api/calendar/oauth/start` for a consent URL, and Google redirects back to `/api/calendar/oauth/callback`, which stores the refresh token and starts syncing that user's bookings. Settings also shows connection state and offers a disconnect.
+
+Note that while the OAuth consent screen is in **Testing**, only Google accounts listed as test users can authorise.
 
 Until this is configured, `GET /api/calendar/status` reports `configured: false` and calendar sync silently no-ops (see `src/server/lib/calendar.ts`).
 
@@ -209,13 +212,15 @@ All routes are prefixed `/api`. Authenticated routes take `Authorization: Bearer
 | `POST /doctors` | Create a doctor account + profile + weekly availability |
 | `PATCH /doctors/:id` | Update specialisation/slot duration/bio/availability |
 | `POST /doctors/:id/leave` | `{ date, reason? }` → records leave, cancels affected held/confirmed bookings, notifies patients and the doctor |
+| `GET /llm-usage` | Today's LLM call count against the self-imposed daily cap |
 
 ### Calendar (`/api/calendar`)
 | Method & path | Description |
 |---|---|
-| `GET /status` | Whether Google Calendar integration is configured |
+| `GET /status` | `configured` (deployment has Google credentials) and `connected` (this user has authorised) |
 | `GET /oauth/start` | Returns the Google consent URL for the current user |
-| `GET /oauth/callback` | OAuth redirect target; stores tokens, redirects back to the app |
+| `GET /oauth/callback` | OAuth redirect target; stores tokens, redirects to `/settings` with the outcome |
+| `DELETE /connection` | Disconnects this user's calendar and clears their event mappings |
 
 ## Known limitations
 

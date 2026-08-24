@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { api, ApiError } from "../lib/api";
 
@@ -166,9 +167,14 @@ export function AdminDashboard() {
     <div className="dashboard">
       <header className="dashboard-header">
         <h1>Admin — {user?.name}</h1>
-        <button className="secondary" onClick={logout}>
-          Log out
-        </button>
+        <div className="row" style={{ marginBottom: 0 }}>
+          <Link className="button-link" to="/settings">
+            Settings
+          </Link>
+          <button className="secondary" onClick={logout}>
+            Log out
+          </button>
+        </div>
       </header>
 
       <NewDoctorForm onCreated={load} />
