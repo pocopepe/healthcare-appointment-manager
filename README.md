@@ -1,275 +1,134 @@
 # Healthcare Appointment & Follow-up Manager
 
-**Live app:** https://healthcare-appointment-manager.avijusanjai.workers.dev
-
-Demo accounts (the landing page explains the three portals; each account lands on its own dashboard):
+**Live:** https://healthcare-appointment-manager.avijusanjai.workers.dev
 
 | Role | Email | Password |
 |---|---|---|
 | Patient | `patient@demo.test` | `demopatient123` |
 | Doctor | `cardio@demo.test` | `demodoctor123` |
-| Admin | *(provisioned separately)* | — |
 
-A clinic appointment platform with separate patient, doctor, and admin portals. Patients book slots and describe symptoms up front; an LLM turns that into a pre-visit summary with an urgency level for the doctor. After the visit, the doctor's notes and prescription get turned into a patient-friendly summary, medication reminders get scheduled, and both sides are kept in sync over email and Google Calendar.
+A clinic booking platform with separate patient, doctor and admin portals. Patients describe symptoms while booking; an LLM turns that into a pre-visit summary with an urgency level for the doctor. After the visit, the doctor's notes and prescription become a patient-friendly summary, medication reminders are scheduled, and both sides stay in sync over email and Google Calendar.
 
-Built on Cloudflare Workers: a [Hono](https://hono.dev) API and a React (Vite) frontend deployed as a single Worker, backed by D1 (Cloudflare's SQLite).
+Hono API + React frontend deployed as a single Cloudflare Worker, backed by D1 (SQLite). Five runtime dependencies.
 
-## What's implemented
+## How a visit flows
 
-**Three portals, one deployment.** You land on the dashboard matching your role.
+1. **Patient** searches doctors by specialisation and picks a slot. The slot is **held for 5 minutes** while they fill in the symptom form, so nobody else can take it mid-typing.
+2. **Confirm** → the LLM produces `{ urgency, chiefComplaint, suggestedQuestions[] }`, stored on the appointment. Confirmation emails are queued and calendar events created for both parties.
+3. **Doctor** opens the appointment already briefed by that summary, records clinical notes and a structured prescription.
+4. **Complete** → a patient-friendly summary is generated, medication reminders are scheduled from the prescription frequency, and the summary is emailed.
+5. Throughout: reschedule moves the calendar event in place, cancellation deletes it, and an admin marking the doctor on leave cancels affected bookings and notifies everyone.
 
-*Patients* register themselves, search doctors by specialisation, hold a slot for five minutes while describing symptoms, then confirm. They can reschedule or cancel, and afterwards read a plain-language summary of the visit with their prescription.
+A **Cron Trigger every 15 minutes** releases abandoned holds, queues medication reminders (spread 08:00–20:00 UTC) and appointment reminders (24h ahead, once), and flushes the email outbox with retries.
 
-*Doctors* see each appointment already triaged — an AI pre-visit summary grading urgency and suggesting three questions to ask — then record clinical notes and a prescription, which completes the visit and schedules medication reminders.
+## Design decisions
 
-*Admins* create and edit doctor profiles (specialisation, weekly working hours, slot duration), mark leave days — which cancels affected bookings and notifies everyone — and inspect the notification outbox and AI usage.
+**Double-booking is enforced by the database.** A partial unique index on `(doctor_id, slot_start)` where `status != 'cancelled'` makes two concurrent bookings of one slot atomically impossible — the loser gets a constraint violation, not a second row. But that index only catches an *identical* start time, and the endpoint receives start/end from the client: a request for 09:15–09:45 against an existing 09:00–09:30 booking has a different start and slips straight past it. So requested slots are also validated against the doctor's real schedule grid (working hours, slot duration, leave days, not in the past), plus an interval-overlap check for when an admin widens slot duration over existing bookings. Off-schedule is a `400`, already-taken is a `409`. Full reasoning in [`docs/SYSTEM_DESIGN.md`](docs/SYSTEM_DESIGN.md).
 
-Running underneath: a cron job every 15 minutes that releases abandoned slot holds, queues medication and appointment reminders, and retries failed emails; Google Calendar sync over OAuth 2.0 that creates, moves and deletes events as bookings change; and an LLM layer that degrades to a clear message rather than breaking anything when it's unavailable.
+**The LLM is not trusted with dosages.** Given only the doctor's shorthand (`Rx ibuprofen 400mg TDS 5/7`), the model expanded it to *"4 times a day, 5 days a week (Monday to Friday)"* — wrong frequency, wrong duration. The prescription is now passed as structured data with explicit rules against altering or inventing dosing, and the generated prose carries a disclaimer pointing at the structured `prescription` field as the source of truth. A paraphrase should never be what a patient doses from.
 
-## Engineering notes
+**Nothing third-party can break a booking.** LLM, email and calendar failures all resolve to a typed "unavailable" result rather than throwing. A missing key, exhausted quota, timeout or unparseable response leaves the appointment booked with the summary marked unavailable and explained in the UI.
 
-The parts that took the most thought, in case they're the interesting bit:
+**AI spend is capped by the app itself.** Workers AI gives 10,000 Neurons/day free (~15–25 per summary). The app counts its own calls per UTC day in `llm_usage` and refuses to call past `LLM_DAILY_LIMIT` (default 200), stopping well short rather than failing hard (free plan) or billing (paid plan). `LLM_DAILY_LIMIT=0` is a kill switch — the test suite uses it so tests never spend anything.
 
-**Double-booking is enforced by the database, not by application logic.** A partial unique index on `(doctor_id, slot_start)` makes two concurrent bookings of one slot atomically impossible. But that index only catches an *identical* start time — since the endpoint receives start/end from the client, a request for 09:15–09:45 against an existing 09:00–09:30 booking slips straight past it. So requested slots are also validated against the doctor's real schedule grid, plus an interval-overlap check for the case where an admin widens slot duration over existing bookings. Full reasoning in [`docs/SYSTEM_DESIGN.md`](docs/SYSTEM_DESIGN.md).
+**Email goes through an outbox, never inline.** Every notification is a row with status, attempt count and last error; the cron delivers and retries, capped at 5 attempts. A provider outage delays mail instead of losing it. Recipients on reserved domains (`.test`, `.example`, `localhost`) are deliberately **skipped** — the demo accounts use `@demo.test` and would otherwise hard-bounce, which is what throttles a young sending account.
 
-**The LLM is not trusted with dosages.** Handed only a doctor's shorthand (`Rx ibuprofen 400mg TDS 5/7`), the model expanded it into *"4 times a day, 5 days a week (Monday to Friday)"* — wrong frequency and wrong duration. The prescription is now passed as structured data with explicit rules against altering or inventing dosing, and the generated prose carries a disclaimer pointing at the structured prescription as the source of truth.
+**Tests run against the real runtime.** 40 tests via `@cloudflare/vitest-pool-workers` execute in workerd against a real D1 instance — no mocked database or HTTP. Several encode regressions found while building: the off-grid overlap above, a leave day wiping completed visits, and reminders firing a day too long and in batches.
 
-**AI spend is capped by the app itself.** Workers AI includes 10,000 Neurons/day free; the app counts its own calls per UTC day and refuses to call the model past a configurable limit, so it stops well short of the allowance rather than failing hard or billing. `LLM_DAILY_LIMIT=0` is a kill switch, which the test suite uses so running tests never spends anything.
-
-**Notifications are never sent inline.** Everything goes through an outbox with retry, attempt caps and recorded errors, so a provider outage delays mail rather than losing it. Recipients on reserved domains (`.test`, `.example`) are deliberately skipped — the demo accounts use `@demo.test`, and handing those to a provider would guarantee hard bounces.
-
-**Tests run against the real runtime.** 40 tests via `@cloudflare/vitest-pool-workers` execute in workerd against a real D1 instance — no mocked database, no mocked HTTP. Several encode regressions found while building: the off-grid overlap, a leave day wiping completed visits, and reminders firing a day long and in batches.
-
-## Stack
-
-- **API:** Hono, running on Cloudflare Workers
-- **Frontend:** React + React Router, built with Vite (`@cloudflare/vite-plugin` bundles both into one deployable Worker)
-- **Database:** Cloudflare D1 (SQLite), schema managed with Drizzle ORM
-- **Auth:** JWT (via `hono/jwt`) + PBKDF2 password hashing (Web Crypto — no bcrypt dependency, since native bindings don't run on Workers)
-- **LLM:** Cloudflare Workers AI (`@cf/meta/llama-3.1-8b-instruct-fp8`) by default — no API key needed; Anthropic/OpenAI swappable via `LLM_PROVIDER`
-- **Email:** SendGrid HTTP API, called over `fetch`
-- **Calendar:** Google Calendar API v3 + OAuth 2.0, called over `fetch`
-- **Background jobs:** Cloudflare Cron Triggers (every 15 minutes)
-- **Tests:** Vitest + `@cloudflare/vitest-pool-workers` (runs against real Workers runtime + D1, not mocks)
-
-Everything above talks to Cloudflare's APIs directly with `fetch`, so the dependency list stays small on purpose.
-
-## Project layout
+## Layout
 
 ```
-src/server/         Hono API (Worker)
-  db/schema.ts       Drizzle schema — see "Database schema" below
-  lib/                slots.ts (availability + hold logic), llm.ts, email.ts,
-                       calendar.ts, scheduler.ts (cron job), password.ts
-  routes/             auth.ts, patient.ts, doctor.ts, admin.ts, calendar.ts
-  middleware/auth.ts  JWT auth + role guard
-  index.ts            Worker entry (fetch + scheduled handlers)
-src/client/          React frontend
-  pages/              Landing, Login, Register, Settings + one dashboard per role
-  lib/                api client, auth context
-migrations/          Drizzle-generated D1 migrations
-scripts/             seed-admin.mjs (first admin), seed-demo.mjs (demo data)
-test/                Vitest suite (unit + integration, against real D1)
-docs/SYSTEM_DESIGN.md  Design write-up (double-booking, leave conflicts, etc.)
+src/server/
+  db/schema.ts        Drizzle schema
+  lib/                slots (availability, holds, overlap), llm, email,
+                      calendar, scheduler (cron), password
+  routes/             auth, patient, doctor, admin, calendar
+  middleware/auth.ts  JWT verification + role guard
+  index.ts            Worker entry (fetch + scheduled)
+src/client/pages/     Landing, Login, Register, Settings, one dashboard per role
+docs/SYSTEM_DESIGN.md Design write-up
 ```
-
-## Local setup
-
-Requires Node 20+ and a Cloudflare account (free tier is enough).
-
-```bash
-npm install
-
-# Local secrets — wrangler reads .dev.vars, not .env
-cp .env.example .dev.vars
-# fill in JWT_SECRET at minimum (any random string). LLM/email/calendar
-# keys can stay blank — those integrations degrade gracefully without them.
-
-# Create the D1 database and wire its ID into wrangler.jsonc (one-time)
-npx wrangler d1 create healthcare-appointment-manager-db
-# copy the printed database_id into wrangler.jsonc -> d1_databases[0].database_id
-
-# Apply the schema to your local D1
-npm run db:migrate:local
-
-# Bootstrap the first admin account (public registration only creates patients)
-ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=changeme123 ADMIN_NAME=Admin npm run db:seed-admin:local
-
-npm run dev
-# App + API at http://localhost:5173
-```
-
-Log in as the seeded admin to create doctor profiles (specialisation, working hours, slot duration). Patients self-register from `/register`.
-
-Optionally, populate demo doctors and a demo patient so there's something to click through immediately:
-
-```bash
-BASE_URL=http://localhost:5173 ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=changeme123 \
-  npm run db:seed-demo
-```
-
-That creates three doctors (Cardiology / Dermatology / General Medicine, each working every day so slots always appear) and a patient account `patient@demo.test` / `demopatient123`. It goes through the real HTTP API, so it exercises the same validation as a normal user.
-
-### Tests
-
-```bash
-npm test
-```
-
-Runs against a real (isolated, in-memory) D1 instance via `@cloudflare/vitest-pool-workers` — no mocking of the database or HTTP layer. Covers password hashing, slot generation, auth, the double-booking race, slot validation (off-grid/out-of-hours/leave-day/past bookings), medication reminder scheduling, and the full hold → confirm → visit → leave-conflict flow.
-
-### Deploying
-
-```bash
-npx wrangler d1 create healthcare-appointment-manager-db   # if not already done
-npm run db:migrate:remote
-
-# Secrets are set per-environment, not committed:
-npx wrangler secret put JWT_SECRET
-npx wrangler secret put SENDGRID_API_KEY        # optional
-npx wrangler secret put ANTHROPIC_API_KEY       # optional
-npx wrangler secret put GOOGLE_CLIENT_ID        # optional
-npx wrangler secret put GOOGLE_CLIENT_SECRET    # optional
-
-ADMIN_EMAIL=you@example.com ADMIN_PASSWORD=... npm run db:seed-admin:remote
-
-npm run deploy
-```
-
-`wrangler deploy` prints the `*.workers.dev` URL. Cron Triggers (for reminders/retries) are enabled automatically on deploy per `wrangler.jsonc`.
-
-## .env.example
-
-See [`.env.example`](.env.example) — copy it to `.dev.vars` for local dev. Every third-party integration (LLM, email, calendar) is optional: leaving its keys blank doesn't break the app, it just runs with that feature disabled (see "LLM/email/calendar failure handling" in `docs/SYSTEM_DESIGN.md`).
-
-## Google Calendar setup
-
-Calendar sync is optional and off by default. To enable it:
-
-1. In [Google Cloud Console](https://console.cloud.google.com/), create a project and enable the **Google Calendar API**.
-2. Configure an OAuth consent screen (External is fine for testing; add your test Google account as a test user).
-3. Create an **OAuth 2.0 Client ID** (type: Web application). Add an authorized redirect URI matching `GOOGLE_REDIRECT_URI` — for local dev that's `http://localhost:5173/api/calendar/oauth/callback`.
-4. Locally, put all three in `.dev.vars`. In production, set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` as Worker secrets (`wrangler secret put <NAME>`) and `GOOGLE_REDIRECT_URI` as a var in `wrangler.jsonc` — it must match the registered redirect URI character for character, or Google returns `redirect_uri_mismatch`.
-5. Log in and open **Settings → Connect Google Calendar**. That calls `GET /api/calendar/oauth/start` for a consent URL, and Google redirects back to `/api/calendar/oauth/callback`, which stores the refresh token and starts syncing that user's bookings. Settings also shows connection state and offers a disconnect.
-
-Note that while the OAuth consent screen is in **Testing**, only Google accounts listed as test users can authorise.
-
-Until this is configured, `GET /api/calendar/status` reports `configured: false` and calendar sync silently no-ops (see `src/server/lib/calendar.ts`).
-
-## LLM prompts
-
-Exactly as specified in the assignment brief, with the pre-visit prompt additionally asking for strict JSON so it can be parsed and stored:
-
-**Pre-visit summary** (`src/server/lib/llm.ts` → `generatePreVisitSummary`):
-> Analyse these symptoms and return ONLY a JSON object with keys "urgency" (one of "Low", "Medium", "High"), "chiefComplaint" (short string), and "suggestedQuestions" (an array of exactly three strings, questions the doctor should ask). Do not include any text outside the JSON object.
->
-> Symptoms: `<symptoms>`
-
-**Post-visit summary** (`generatePostVisitSummary`) — the brief's prompt, plus an authoritative medication block and explicit constraints:
-> Convert these clinical notes into a patient-friendly summary with a medication schedule and follow-up steps. Write in plain, reassuring language a patient with no medical background can follow.
->
-> Rules you must follow exactly:
-> - Reproduce the medication schedule below word for word in meaning. Do not change any dose, frequency, or number of days.
-> - Do not invent medicines, doses, schedules, tests, or advice that are not stated below.
-> - Do not describe the course in weeks or weekdays. It runs for a number of consecutive days.
-> - If something is unclear, tell the patient to ask their doctor rather than guessing.
->
-> Medication schedule (authoritative): `<expanded from the structured prescription>`
->
-> Clinical notes: `<notes>`
-
-Those constraints are not decoration. Handed only the doctor's shorthand (`Rx ibuprofen 400mg TDS 5/7`), an 8B model expanded it into *"4 times a day, 5 days a week (Monday to Friday)"* — wrong frequency and wrong duration. Passing the prescription as structured data and forbidding invention fixed it. The prose also carries a disclaimer pointing at the structured `prescription` field as the real source of truth, since a generated paraphrase should never be what a patient doses from.
-
-### Cost control
-
-Workers AI includes 10,000 Neurons/day free, and a summary costs roughly 15–25. The app counts its own calls per UTC day in `llm_usage` and refuses to call the model past `LLM_DAILY_LIMIT` (default 200), so it stops well short of the allowance rather than failing hard (free plan) or billing (paid plan). `GET /api/admin/llm-usage` reports today's spend. Setting `LLM_DAILY_LIMIT=0` disables LLM calls entirely — the test suite uses this so running tests never spends Neurons.
-
-Both calls go through a provider-agnostic `callLLM()` — set `LLM_PROVIDER` to `anthropic` or `openai`. A missing key, non-2xx response, network error, or unparseable JSON all resolve to `null` rather than throwing; the appointment is still booked/completed with the summary marked unavailable (see `docs/SYSTEM_DESIGN.md`).
 
 ## Database schema
 
-Defined in `src/server/db/schema.ts` (Drizzle, SQLite dialect). Summary:
+`src/server/db/schema.ts` (Drizzle, SQLite):
 
 | Table | Purpose |
 |---|---|
 | `users` | All accounts (patient/doctor/admin), unique on email |
-| `doctor_profiles` | One row per doctor: specialisation, slot duration, bio |
-| `doctor_availability` | Weekly recurring working hours per doctor (day of week + start/end time) |
-| `doctor_leaves` | Dates a doctor is unavailable, unique per (doctor, date) |
-| `appointments` | Bookings: patient, doctor, slot times, status (`held`/`confirmed`/`cancelled`/`completed`), symptoms + AI pre-visit summary, post-visit notes + prescription + AI post-visit summary |
-| `medication_reminders` | One row per prescribed medication, driving the reminder cron job |
-| `notification_outbox` | Every outbound email, with status/attempts/last error — the retry queue |
+| `doctor_profiles` | Specialisation, slot duration, bio |
+| `doctor_availability` | Weekly working hours (day of week + start/end) |
+| `doctor_leaves` | Unavailable dates, unique per (doctor, date) |
+| `appointments` | Slot times, status (`held`/`confirmed`/`cancelled`/`completed`), symptoms, both AI summaries, prescription |
+| `medication_reminders` | One row per prescribed medication, drives the reminder job |
+| `notification_outbox` | Every outbound email with status/attempts/error — the retry queue |
 | `calendar_connections` | Per-user Google OAuth tokens |
-| `calendar_events` | Maps an (appointment, user) pair to its Google Calendar event id |
+| `calendar_events` | Maps (appointment, user) → Google event id |
+| `llm_usage` | Per-day LLM call count for the spend cap |
 
-The load-bearing constraint: `appointments` has a **partial unique index** on `(doctor_id, slot_start)` where `status != 'cancelled'`, which makes concurrent booking of the same slot atomically impossible. Because that index only catches an identical start time, the booking endpoint additionally validates the requested slot against the doctor's schedule grid and checks for interval overlap — see `docs/SYSTEM_DESIGN.md`.
+## API
 
-## API docs
+All routes under `/api`; authenticated routes take `Authorization: Bearer <jwt>`.
 
-All routes are prefixed `/api`. Authenticated routes take `Authorization: Bearer <jwt>`.
+**Auth** — `POST /auth/register` (patients only; doctor/admin are provisioned, so the endpoint can't escalate role) · `POST /auth/login` · `GET /auth/me`
 
-### Auth (`/api/auth`)
-| Method & path | Description |
+**Patient** (role: patient)
+| Route | Purpose |
 |---|---|
-| `POST /register` | Patient self-registration: `{ email, password, name, phone? }` → `{ token, user }` |
-| `POST /login` | `{ email, password }` → `{ token, user }` |
-| `GET /me` | Current user, from the JWT |
+| `GET /patient/doctors?specialisation=` | List/filter doctors |
+| `GET /patient/doctors/:id/slots?date=` | Available slots that day |
+| `POST /patient/appointments/hold` | Hold a slot for 5 min; `400` off-schedule, `409` taken |
+| `POST /patient/appointments/:id/confirm` | `{ symptoms }` → AI summary, confirm, notify, sync calendar |
+| `GET /patient/appointments/mine` | Booking history |
+| `POST /patient/appointments/:id/reschedule` | Move it; calendar event updated in place |
+| `POST /patient/appointments/:id/cancel` | Cancel, notify, remove calendar event |
 
-### Patient (`/api/patient`, role: patient)
-| Method & path | Description |
-|---|---|
-| `GET /doctors?specialisation=` | List doctors, optionally filtered |
-| `GET /doctors/:id/slots?date=YYYY-MM-DD` | Available slots for that date |
-| `POST /appointments/hold` | `{ doctorId, slotStart, slotEnd }` → holds a slot for 5 min, `409` if already taken |
-| `POST /appointments/:id/confirm` | `{ symptoms }` → generates the AI pre-visit summary, confirms the booking, queues confirmation emails, syncs calendars |
-| `GET /appointments/mine` | The patient's booking history |
-| `POST /appointments/:id/reschedule` | `{ slotStart, slotEnd }` → moves a confirmed booking, updates both calendar events in place, notifies both sides |
-| `POST /appointments/:id/cancel` | Cancels a confirmed booking, notifies the doctor, removes calendar events |
+**Doctor** (role: doctor) — `GET /doctor/appointments` (with pre-visit summaries) · `GET /doctor/leaves` · `POST /doctor/appointments/:id/visit` `{ notes, prescription[] }` → post-visit summary + medication reminders
 
-### Doctor (`/api/doctor`, role: doctor)
-| Method & path | Description |
-|---|---|
-| `GET /appointments` | The doctor's bookings, including the AI pre-visit summary |
-| `GET /leaves` | The doctor's recorded leave days |
-| `POST /appointments/:id/visit` | `{ notes, prescription: [{ medication, dosage, timesPerDay, durationDays }] }` → generates the AI post-visit summary, schedules medication reminders, marks the visit complete |
+**Admin** (role: admin) — `GET|POST /admin/doctors` · `PATCH /admin/doctors/:id` · `POST /admin/doctors/:id/leave` (cancels affected bookings, notifies) · `GET /admin/llm-usage` · `GET /admin/notifications` (the outbox) · `POST /admin/run-jobs` (run cron work on demand)
 
-### Admin (`/api/admin`, role: admin)
-| Method & path | Description |
-|---|---|
-| `GET /doctors` | List all doctors |
-| `POST /doctors` | Create a doctor account + profile + weekly availability |
-| `PATCH /doctors/:id` | Update specialisation/slot duration/bio/availability |
-| `POST /doctors/:id/leave` | `{ date, reason? }` → records leave, cancels affected held/confirmed bookings, notifies patients and the doctor |
-| `GET /llm-usage` | Today's LLM call count against the self-imposed daily cap |
-| `GET /notifications` | The notification outbox — every message queued, its delivery status, attempts and last error |
-| `POST /run-jobs` | Runs the cron jobs on demand (hold sweep, reminders, outbox flush) instead of waiting for the next 15-minute tick |
+**Calendar** — `GET /calendar/status` (`configured` + `connected`) · `GET /calendar/oauth/start` · `GET /calendar/oauth/callback` · `DELETE /calendar/connection`
 
-### Calendar (`/api/calendar`)
-| Method & path | Description |
-|---|---|
-| `GET /status` | `configured` (deployment has Google credentials) and `connected` (this user has authorised) |
-| `GET /oauth/start` | Returns the Google consent URL for the current user |
-| `GET /oauth/callback` | OAuth redirect target; stores tokens, redirects to `/settings` with the outcome |
-| `DELETE /connection` | Disconnects this user's calendar and clears their event mappings |
+## LLM prompts
 
-### Seeing the emails without an email provider
+From the brief, with the pre-visit one constrained to strict JSON so it can be parsed and stored (`src/server/lib/llm.ts`):
 
-`SENDGRID_API_KEY` is optional. Without it, notifications are still queued, scheduled, retried and status-tracked exactly as they would be — they're just logged instead of delivered. The **admin dashboard → Notifications** panel (and `GET /api/admin/notifications`) shows the outbox, so the notification logic is verifiable without configuring any provider.
+> **Pre-visit:** Analyse these symptoms and return ONLY a JSON object with keys "urgency" (one of "Low", "Medium", "High"), "chiefComplaint" (short string), and "suggestedQuestions" (an array of exactly three strings, questions the doctor should ask). Do not include any text outside the JSON object. Symptoms: `<symptoms>`
 
-To send for real: SendGrid's **Single Sender Verification** works without owning a domain — verify one from-address, create an API key with Mail Send permission, then `wrangler secret put SENDGRID_API_KEY` and `wrangler secret put EMAIL_FROM` (which must match the verified address exactly, or sends are rejected with a 403).
+> **Post-visit:** Convert these clinical notes into a patient-friendly summary with a medication schedule and follow-up steps. Write in plain, reassuring language a patient with no medical background can follow.
+> Rules you must follow exactly: reproduce the medication schedule below word for word in meaning; do not change any dose, frequency, or number of days; do not invent medicines, doses, schedules, tests, or advice not stated below; do not describe the course in weeks or weekdays — it runs for consecutive days; if something is unclear, tell the patient to ask their doctor.
+> Medication schedule (authoritative): `<expanded from the structured prescription>` — Clinical notes: `<notes>`
 
-Addresses on reserved domains (`.test`, `.example`, `.invalid`, `localhost`, `example.com`) are deliberately **skipped** rather than sent. The seeded demo accounts use `@demo.test`, and handing those to a provider would guarantee hard bounces — bounce rate is what gets a young sending account throttled. They appear in the outbox as `skipped` with the reason recorded.
+Default provider is **Cloudflare Workers AI** (`@cf/meta/llama-3.1-8b-instruct-fp8`), which needs no API key. Set `LLM_PROVIDER` to `anthropic` or `openai` to swap.
 
-## Background jobs
+## Running it
 
-A Cron Trigger runs every 15 minutes (`src/server/lib/scheduler.ts`) and does four things:
+```bash
+npm install
+cp .env.example .dev.vars          # JWT_SECRET is the only one required
+npx wrangler d1 create healthcare-appointment-manager-db   # put the id in wrangler.jsonc
+npm run db:migrate:local
+ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=changeme123 npm run db:seed-admin:local
+npm run dev                        # http://localhost:5173
+npm test                           # 40 tests, real workerd + D1
+```
 
-1. **Releases expired slot holds** — a hold abandoned mid-symptom-form is cancelled so the slot returns to circulation.
-2. **Queues medication reminders** — doses spread across 08:00–20:00 UTC for the length of the course, skipping times already past.
-3. **Queues appointment reminders** — once per appointment, 24 hours ahead, to both patient and doctor.
-4. **Processes the email outbox** — delivers pending notifications and retries failures with an attempt cap.
+`npm run db:seed-demo` adds three doctors and a demo patient. Deploy with `npm run db:migrate:remote && npm run deploy`; secrets go in via `wrangler secret put <NAME>`, never the repo.
+
+Every integration is optional — see [`.env.example`](.env.example). Without keys the app runs with that feature disabled rather than breaking: no LLM key means summaries are marked unavailable, no `SENDGRID_API_KEY` means notifications are queued and logged instead of delivered (visible in admin → Notifications).
+
+## Google Calendar setup
+
+1. In Google Cloud Console, create a project and enable the **Google Calendar API**.
+2. Configure an OAuth consent screen (External); while it's in Testing, only accounts listed as **test users** can authorise.
+3. Create an **OAuth 2.0 Client ID** (Web application) with redirect URI `<app-url>/api/calendar/oauth/callback` — it must match `GOOGLE_REDIRECT_URI` character for character or Google returns `redirect_uri_mismatch`.
+4. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` as secrets, `GOOGLE_REDIRECT_URI` as a var in `wrangler.jsonc`.
+5. Log in → **Settings → Connect Google Calendar**.
+
+Unconfigured, `/api/calendar/status` reports `configured: false` and sync silently no-ops.
 
 ## Known limitations
 
-- The OAuth `state` parameter is the raw user id, not a signed/short-lived token — fine for this assignment's scope, but would need hardening (CSRF protection) before production use.
-- There's no password-reset flow; the admin seed script prints a temporary password to change after first login.
+- The OAuth `state` parameter is the raw user id rather than a signed, short-lived token — it would need CSRF hardening before production.
+- No password-reset flow; the admin seed script prints a temporary password to change after first login.
+- Times are handled in UTC throughout, including what the UI displays. A real clinic would need per-user timezones.
