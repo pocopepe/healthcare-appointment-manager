@@ -1,5 +1,15 @@
 # Healthcare Appointment & Follow-up Manager
 
+**Live app:** https://healthcare-appointment-manager.avijusanjai.workers.dev
+
+Demo accounts (the landing page explains the three portals; each account lands on its own dashboard):
+
+| Role | Email | Password |
+|---|---|---|
+| Patient | `patient@demo.test` | `demopatient123` |
+| Doctor | `cardio@demo.test` | `demodoctor123` |
+| Admin | *(provisioned separately)* | — |
+
 A clinic appointment platform with separate patient, doctor, and admin portals. Patients book slots and describe symptoms up front; an LLM turns that into a pre-visit summary with an urgency level for the doctor. After the visit, the doctor's notes and prescription get turned into a patient-friendly summary, medication reminders get scheduled, and both sides are kept in sync over email and Google Calendar.
 
 Built on Cloudflare Workers: a [Hono](https://hono.dev) API and a React (Vite) frontend deployed as a single Worker, backed by D1 (Cloudflare's SQLite).
@@ -62,6 +72,15 @@ npm run dev
 ```
 
 Log in as the seeded admin to create doctor profiles (specialisation, working hours, slot duration). Patients self-register from `/register`.
+
+Optionally, populate demo doctors and a demo patient so there's something to click through immediately:
+
+```bash
+BASE_URL=http://localhost:5173 ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=changeme123 \
+  npm run db:seed-demo
+```
+
+That creates three doctors (Cardiology / Dermatology / General Medicine, each working every day so slots always appear) and a patient account `patient@demo.test` / `demopatient123`. It goes through the real HTTP API, so it exercises the same validation as a normal user.
 
 ### Tests
 
