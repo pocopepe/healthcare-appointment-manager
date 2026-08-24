@@ -121,9 +121,8 @@ Calendar sync is optional and off by default. To enable it:
 1. In [Google Cloud Console](https://console.cloud.google.com/), create a project and enable the **Google Calendar API**.
 2. Configure an OAuth consent screen (External is fine for testing; add your test Google account as a test user).
 3. Create an **OAuth 2.0 Client ID** (type: Web application). Add an authorized redirect URI matching `GOOGLE_REDIRECT_URI` — for local dev that's `http://localhost:5173/api/calendar/oauth/callback`.
-4. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_REDIRECT_URI` in `.dev.vars` (or as Worker secrets in production).
-5. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` as Worker secrets (`wrangler secret put <NAME>`), and `GOOGLE_REDIRECT_URI` as a var in `wrangler.jsonc` — it must match the registered redirect URI character for character or Google returns `redirect_uri_mismatch`.
-6. Log in and open **Settings → Connect Google Calendar**. That calls `GET /api/calendar/oauth/start` for a consent URL, and Google redirects back to `/api/calendar/oauth/callback`, which stores the refresh token and starts syncing that user's bookings. Settings also shows connection state and offers a disconnect.
+4. Locally, put all three in `.dev.vars`. In production, set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` as Worker secrets (`wrangler secret put <NAME>`) and `GOOGLE_REDIRECT_URI` as a var in `wrangler.jsonc` — it must match the registered redirect URI character for character, or Google returns `redirect_uri_mismatch`.
+5. Log in and open **Settings → Connect Google Calendar**. That calls `GET /api/calendar/oauth/start` for a consent URL, and Google redirects back to `/api/calendar/oauth/callback`, which stores the refresh token and starts syncing that user's bookings. Settings also shows connection state and offers a disconnect.
 
 Note that while the OAuth consent screen is in **Testing**, only Google accounts listed as test users can authorise.
 
