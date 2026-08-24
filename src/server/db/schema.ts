@@ -123,6 +123,10 @@ export const appointments = sqliteTable(
     aiStatus: text("ai_status"),
 
     cancelledReason: text("cancelled_reason"),
+    // Set when the pre-appointment reminder has gone out, so the cron job
+    // doesn't re-send it every 15 minutes. Cleared on reschedule so the
+    // patient gets a fresh reminder for the new time.
+    reminderSentAt: text("reminder_sent_at"),
     ...timestamps,
   },
   (table) => ({
@@ -175,8 +179,10 @@ export const notificationOutbox = sqliteTable(
         "booking_confirmation",
         "appointment_reminder",
         "cancellation",
+        "reschedule",
         "leave_conflict",
         "medication_reminder",
+        "visit_summary",
       ],
     }).notNull(),
     subject: text("subject").notNull(),

@@ -2,10 +2,15 @@
 // Three jobs: release expired slot holds, queue today's medication
 // reminders, and retry any email in the outbox that hasn't gone out yet.
 
-import { eq, and, lte, isNull, or, ne } from "drizzle-orm";
+import { eq, and, lte, gt, isNull, or, ne } from "drizzle-orm";
 import type { Bindings } from "../env";
 import type { Db } from "../db/client";
-import { appointments, medicationReminders } from "../db/schema";
+import {
+  appointments,
+  medicationReminders,
+  doctorProfiles,
+  users,
+} from "../db/schema";
 import { isHoldExpired } from "./slots";
 import { queueEmail, processOutbox } from "./email";
 
@@ -90,14 +95,77 @@ async function queueMedicationReminders(db: Db) {
   return queued;
 }
 
+// How far ahead of an appointment the "don't forget" email goes out.
+const REMINDER_LEAD_HOURS = 24;
+
+// Reminds both sides of an upcoming appointment once, a day before it starts.
+// `reminder_sent_at` is what stops the 15-minute tick re-sending it.
+async function queueAppointmentReminders(db: Db) {
+  const now = new Date();
+  const windowEnd = new Date(now.getTime() + REMINDER_LEAD_HOURS * 3600_000);
+
+  const upcoming = await db.query.appointments.findMany({
+    where: and(
+      eq(appointments.status, "confirmed"),
+      isNull(appointments.reminderSentAt),
+      gt(appointments.slotStart, now.toISOString()),
+      lte(appointments.slotStart, windowEnd.toISOString()),
+    ),
+  });
+
+  let queued = 0;
+  for (const appt of upcoming) {
+    const doctor = await db.query.doctorProfiles.findFirst({
+      where: eq(doctorProfiles.id, appt.doctorId),
+    });
+    const doctorUser = doctor
+      ? await db.query.users.findFirst({ where: eq(users.id, doctor.userId) })
+      : null;
+    const patientUser = await db.query.users.findFirst({
+      where: eq(users.id, appt.patientId),
+    });
+
+    const when = new Date(appt.slotStart).toUTCString();
+
+    if (patientUser) {
+      await queueEmail(db, {
+        userId: patientUser.id,
+        appointmentId: appt.id,
+        type: "appointment_reminder",
+        subject: "Reminder: your appointment is tomorrow",
+        body: `This is a reminder that your appointment with Dr. ${doctorUser?.name ?? ""} is on ${when}.`,
+      });
+      queued++;
+    }
+    if (doctorUser) {
+      await queueEmail(db, {
+        userId: doctorUser.id,
+        appointmentId: appt.id,
+        type: "appointment_reminder",
+        subject: "Reminder: appointment tomorrow",
+        body: `Reminder: you have an appointment with ${patientUser?.name ?? "a patient"} on ${when}.`,
+      });
+      queued++;
+    }
+
+    await db
+      .update(appointments)
+      .set({ reminderSentAt: new Date().toISOString() })
+      .where(eq(appointments.id, appt.id));
+  }
+
+  return queued;
+}
+
 export async function runScheduledTasks(env: Bindings, db: Db) {
-  const [releasedHolds, remindersQueued, outboxResult] = await Promise.all([
+  const [releasedHolds, medsQueued, apptReminders, outboxResult] = await Promise.all([
     releaseExpiredHolds(db),
     queueMedicationReminders(db),
+    queueAppointmentReminders(db),
     processOutbox(env, db),
   ]);
 
   console.info(
-    `[scheduler] released ${releasedHolds} expired holds, queued ${remindersQueued} reminders, processed ${outboxResult.processed} outbox entries`,
+    `[scheduler] released ${releasedHolds} expired holds, queued ${medsQueued} medication reminders and ${apptReminders} appointment reminders, processed ${outboxResult.processed} outbox entries`,
   );
 }

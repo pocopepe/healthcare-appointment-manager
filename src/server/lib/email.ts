@@ -15,8 +15,10 @@ export type NotificationType =
   | "booking_confirmation"
   | "appointment_reminder"
   | "cancellation"
+  | "reschedule"
   | "leave_conflict"
-  | "medication_reminder";
+  | "medication_reminder"
+  | "visit_summary";
 
 export async function queueEmail(
   db: Db,

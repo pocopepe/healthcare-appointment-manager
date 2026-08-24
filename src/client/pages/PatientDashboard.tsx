@@ -51,6 +51,10 @@ export function PatientDashboard() {
   const [lastSummary, setLastSummary] = useState<Appointment["aiPreVisitSummary"]>(null);
 
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [reschedulingId, setReschedulingId] = useState<string | null>(null);
+  const [rescheduleDate, setRescheduleDate] = useState(todayIso());
+  const [rescheduleSlots, setRescheduleSlots] = useState<Slot[]>([]);
+  const [rescheduleError, setRescheduleError] = useState<string | null>(null);
 
   function loadDoctors() {
     api<Doctor[]>(`/patient/doctors${specialisation ? `?specialisation=${encodeURIComponent(specialisation)}` : ""}`)
@@ -112,6 +116,36 @@ export function PatientDashboard() {
       setBookingError(err instanceof ApiError ? err.message : "Could not confirm booking");
     } finally {
       setConfirming(false);
+    }
+  }
+
+  function openReschedule(appt: Appointment) {
+    setReschedulingId(appt.id);
+    setRescheduleError(null);
+    const d = appt.slotStart.slice(0, 10);
+    const start = d > todayIso() ? d : todayIso();
+    setRescheduleDate(start);
+    loadRescheduleSlots(appt.doctorId, start);
+  }
+
+  function loadRescheduleSlots(doctorId: string, date: string) {
+    api<Slot[]>(`/patient/doctors/${doctorId}/slots?date=${date}`)
+      .then(setRescheduleSlots)
+      .catch(() => setRescheduleSlots([]));
+  }
+
+  async function doReschedule(appt: Appointment, slot: Slot) {
+    setRescheduleError(null);
+    try {
+      await api(`/patient/appointments/${appt.id}/reschedule`, {
+        method: "POST",
+        body: { slotStart: slot.start, slotEnd: slot.end },
+      });
+      setReschedulingId(null);
+      loadAppointments();
+    } catch (err) {
+      setRescheduleError(err instanceof ApiError ? err.message : "Could not reschedule");
+      loadRescheduleSlots(appt.doctorId, rescheduleDate);
     }
   }
 
@@ -224,11 +258,47 @@ export function PatientDashboard() {
                   <span className={`status status-${a.status}`}>{a.status}</span>
                 </div>
                 {a.status === "confirmed" && (
-                  <button className="secondary" onClick={() => cancelAppointment(a.id)}>
-                    Cancel
-                  </button>
+                  <div className="row" style={{ marginBottom: 0 }}>
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        reschedulingId === a.id ? setReschedulingId(null) : openReschedule(a)
+                      }
+                    >
+                      {reschedulingId === a.id ? "Close" : "Reschedule"}
+                    </button>
+                    <button className="secondary" onClick={() => cancelAppointment(a.id)}>
+                      Cancel
+                    </button>
+                  </div>
                 )}
               </div>
+              {reschedulingId === a.id && (
+                <div className="slot-picker">
+                  <div className="row">
+                    <input
+                      type="date"
+                      min={todayIso()}
+                      value={rescheduleDate}
+                      onChange={(e) => {
+                        setRescheduleDate(e.target.value);
+                        loadRescheduleSlots(a.doctorId, e.target.value);
+                      }}
+                    />
+                  </div>
+                  {rescheduleSlots.length === 0 && (
+                    <p className="muted">No slots available on this date.</p>
+                  )}
+                  <div className="slot-grid">
+                    {rescheduleSlots.map((s) => (
+                      <button key={s.start} className="slot" onClick={() => doReschedule(a, s)}>
+                        {new Date(s.start).toUTCString().slice(17, 22)}
+                      </button>
+                    ))}
+                  </div>
+                  {rescheduleError && <p className="error">{rescheduleError}</p>}
+                </div>
+              )}
               {a.aiPreVisitSummary && (
                 <p className="muted">Urgency: {a.aiPreVisitSummary.urgency} — {a.aiPreVisitSummary.chiefComplaint}</p>
               )}

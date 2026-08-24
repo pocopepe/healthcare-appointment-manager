@@ -115,7 +115,7 @@ doctor.post("/appointments/:id/visit", async (c) => {
   await queueEmail(db, {
     userId: appt.patientId,
     appointmentId: id,
-    type: "booking_confirmation",
+    type: "visit_summary",
     subject: "Your visit summary is ready",
     body: postVisitSummary,
   });

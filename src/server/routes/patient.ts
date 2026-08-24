@@ -225,6 +225,95 @@ patient.get("/appointments/mine", async (c) => {
   return c.json(rows);
 });
 
+// Moves a confirmed booking to a different slot. The Google Calendar event
+// is PATCHed rather than recreated (upsertCalendarEvent keeps the mapping),
+// so the entry already in someone's calendar shifts in place.
+patient.post("/appointments/:id/reschedule", async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.json<{ slotStart?: string; slotEnd?: string }>();
+  const { slotStart, slotEnd } = body;
+  if (!slotStart || !slotEnd) {
+    return c.json({ error: "slotStart and slotEnd are required" }, 400);
+  }
+
+  const db = createDb(c.env.DB);
+  const appt = await db.query.appointments.findFirst({
+    where: and(eq(appointments.id, id), eq(appointments.patientId, c.get("userId"))),
+  });
+  if (!appt) return c.json({ error: "Appointment not found" }, 404);
+  if (appt.status !== "confirmed") {
+    return c.json({ error: `Cannot reschedule a ${appt.status} appointment` }, 400);
+  }
+  if (appt.slotStart === slotStart && appt.slotEnd === slotEnd) {
+    return c.json({ error: "That is already the appointment time" }, 400);
+  }
+
+  // Same validation as booking: the new slot has to be one the doctor
+  // actually offers, and must not collide with another appointment.
+  if (!(await isSlotOnSchedule(db, appt.doctorId, slotStart, slotEnd))) {
+    return c.json(
+      { error: "That slot is not on this doctor's schedule. Please pick an offered slot." },
+      400,
+    );
+  }
+  const overlap = await findOverlappingAppointment(db, appt.doctorId, slotStart, slotEnd);
+  if (overlap && overlap.id !== id) {
+    return c.json({ error: "This slot was just taken. Please pick another." }, 409);
+  }
+
+  const previous = new Date(appt.slotStart).toUTCString();
+  try {
+    await db
+      .update(appointments)
+      .set({
+        slotStart,
+        slotEnd,
+        // The old reminder referred to the old time, so allow a fresh one.
+        reminderSentAt: null,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(appointments.id, id));
+  } catch (err) {
+    if (String(err).includes("UNIQUE constraint failed")) {
+      return c.json({ error: "This slot was just taken. Please pick another." }, 409);
+    }
+    throw err;
+  }
+
+  const doctor = await db.query.doctorProfiles.findFirst({
+    where: eq(doctorProfiles.id, appt.doctorId),
+  });
+  const doctorUser = doctor
+    ? await db.query.users.findFirst({ where: eq(users.id, doctor.userId) })
+    : null;
+  const patientUser = await db.query.users.findFirst({
+    where: eq(users.id, c.get("userId")),
+  });
+
+  const when = new Date(slotStart).toUTCString();
+  for (const [user, summary] of [
+    [patientUser, `Appointment with Dr. ${doctorUser?.name ?? ""}`],
+    [doctorUser, `Appointment with ${patientUser?.name ?? "patient"}`],
+  ] as const) {
+    if (!user) continue;
+    await queueEmail(db, {
+      userId: user.id,
+      appointmentId: id,
+      type: "reschedule",
+      subject: "Your appointment has been rescheduled",
+      body: `The appointment previously on ${previous} has been moved to ${when}.`,
+    });
+    await upsertCalendarEvent(c.env, db, user.id, id, {
+      summary,
+      description: "Booked via Healthcare Appointment Manager",
+      startIso: slotStart,
+      endIso: slotEnd,
+    });
+  }
+
+  return c.json({ id, status: "confirmed", slotStart, slotEnd });
+});
+
 patient.post("/appointments/:id/cancel", async (c) => {
   const id = c.req.param("id");
   const db = createDb(c.env.DB);

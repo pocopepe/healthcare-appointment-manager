@@ -195,6 +195,7 @@ All routes are prefixed `/api`. Authenticated routes take `Authorization: Bearer
 | `POST /appointments/hold` | `{ doctorId, slotStart, slotEnd }` → holds a slot for 5 min, `409` if already taken |
 | `POST /appointments/:id/confirm` | `{ symptoms }` → generates the AI pre-visit summary, confirms the booking, queues confirmation emails, syncs calendars |
 | `GET /appointments/mine` | The patient's booking history |
+| `POST /appointments/:id/reschedule` | `{ slotStart, slotEnd }` → moves a confirmed booking, updates both calendar events in place, notifies both sides |
 | `POST /appointments/:id/cancel` | Cancels a confirmed booking, notifies the doctor, removes calendar events |
 
 ### Doctor (`/api/doctor`, role: doctor)
@@ -221,8 +222,16 @@ All routes are prefixed `/api`. Authenticated routes take `Authorization: Bearer
 | `GET /oauth/callback` | OAuth redirect target; stores tokens, redirects to `/settings` with the outcome |
 | `DELETE /connection` | Disconnects this user's calendar and clears their event mappings |
 
+## Background jobs
+
+A Cron Trigger runs every 15 minutes (`src/server/lib/scheduler.ts`) and does four things:
+
+1. **Releases expired slot holds** — a hold abandoned mid-symptom-form is cancelled so the slot returns to circulation.
+2. **Queues medication reminders** — doses spread across 08:00–20:00 UTC for the length of the course, skipping times already past.
+3. **Queues appointment reminders** — once per appointment, 24 hours ahead, to both patient and doctor.
+4. **Processes the email outbox** — delivers pending notifications and retries failures with an attempt cap.
+
 ## Known limitations
 
-- Reschedule isn't a separate endpoint — a patient cancels and rebooks. The brief's "updated ... on reschedule" calendar behavior is covered for cancellation, not a dedicated reschedule flow.
 - The OAuth `state` parameter is the raw user id, not a signed/short-lived token — fine for this assignment's scope, but would need hardening (CSRF protection) before production use.
 - There's no password-reset flow; the admin seed script prints a temporary password to change after first login.
