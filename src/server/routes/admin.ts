@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, and, gte, lt, inArray } from "drizzle-orm";
+import { eq, and, gte, lt, inArray, desc } from "drizzle-orm";
 import type { AppEnv } from "../env";
 import { createDb } from "../db/client";
 import {
@@ -8,6 +8,7 @@ import {
   doctorAvailability,
   doctorLeaves,
   appointments,
+  notificationOutbox,
 } from "../db/schema";
 import { authenticate, requireRole } from "../middleware/auth";
 import { hashPassword } from "../lib/password";
@@ -32,6 +33,36 @@ admin.get("/llm-usage", async (c) => {
     limit,
     remaining: Math.max(limit - used, 0),
     exhausted: used >= limit,
+  });
+});
+
+// Every notification the system has produced, newest first. Without an email
+// provider configured nothing actually leaves the building, so this is how
+// you confirm the notification logic — and the retry bookkeeping — is working.
+admin.get("/notifications", async (c) => {
+  const db = createDb(c.env.DB);
+  const rows = await db
+    .select({
+      id: notificationOutbox.id,
+      type: notificationOutbox.type,
+      subject: notificationOutbox.subject,
+      body: notificationOutbox.body,
+      status: notificationOutbox.status,
+      attempts: notificationOutbox.attempts,
+      lastError: notificationOutbox.lastError,
+      scheduledFor: notificationOutbox.scheduledFor,
+      sentAt: notificationOutbox.sentAt,
+      recipient: users.email,
+      recipientName: users.name,
+    })
+    .from(notificationOutbox)
+    .innerJoin(users, eq(notificationOutbox.userId, users.id))
+    .orderBy(desc(notificationOutbox.createdAt))
+    .limit(Number(c.req.query("limit")) || 50);
+
+  return c.json({
+    deliveryEnabled: Boolean(c.env.SENDGRID_API_KEY),
+    notifications: rows,
   });
 });
 

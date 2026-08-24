@@ -13,6 +13,84 @@ type Doctor = {
 
 type AvailabilityRow = { dayOfWeek: number; startTime: string; endTime: string };
 
+type Notification = {
+  id: string;
+  type: string;
+  subject: string;
+  body: string;
+  status: string;
+  attempts: number;
+  lastError: string | null;
+  scheduledFor: string;
+  sentAt: string | null;
+  recipient: string;
+};
+
+// Shows what the system has sent (or would send). With no email provider
+// configured nothing leaves the building, so this is how you verify the
+// notification and retry logic actually works.
+function NotificationLog() {
+  const [rows, setRows] = useState<Notification[]>([]);
+  const [deliveryEnabled, setDeliveryEnabled] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  function load() {
+    api<{ deliveryEnabled: boolean; notifications: Notification[] }>("/admin/notifications")
+      .then((r) => {
+        setRows(r.notifications);
+        setDeliveryEnabled(r.deliveryEnabled);
+      })
+      .catch(() => {});
+  }
+
+  useEffect(load, []);
+
+  return (
+    <section className="card">
+      <div className="row space-between">
+        <h2 style={{ margin: 0 }}>Notifications ({rows.length})</h2>
+        <div className="row" style={{ marginBottom: 0 }}>
+          <button className="secondary" onClick={load}>
+            Refresh
+          </button>
+          <button className="secondary" onClick={() => setOpen((o) => !o)}>
+            {open ? "Hide" : "Show"}
+          </button>
+        </div>
+      </div>
+      <p className="muted">
+        {deliveryEnabled
+          ? "Email delivery is configured — these are queued and sent by the background job, with retries on failure."
+          : "No email provider is configured, so messages are queued and logged rather than delivered. The queue, retry counts and scheduling below are real."}
+      </p>
+      {open && rows.length === 0 && <p className="muted">Nothing queued yet.</p>}
+      {open && (
+        <ul className="appointment-list">
+          {rows.map((n) => (
+            <li key={n.id} className="appointment">
+              <div className="row space-between">
+                <div>
+                  <strong>{n.subject}</strong>
+                  <span className={`status status-${n.status === "sent" ? "completed" : n.status === "failed" ? "cancelled" : "confirmed"}`}>
+                    {n.status}
+                  </span>
+                </div>
+                <span className="muted">{n.type}</span>
+              </div>
+              <p className="muted">
+                To {n.recipient} · scheduled {new Date(n.scheduledFor).toUTCString()}
+                {n.attempts > 0 ? ` · ${n.attempts} attempt(s)` : ""}
+              </p>
+              <p className="muted" style={{ whiteSpace: "pre-wrap" }}>{n.body.slice(0, 300)}</p>
+              {n.lastError && <p className="error">{n.lastError}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function NewDoctorForm({ onCreated }: { onCreated: () => void }) {
@@ -178,6 +256,8 @@ export function AdminDashboard() {
       </header>
 
       <NewDoctorForm onCreated={load} />
+
+      <NotificationLog />
 
       <section className="card">
         <h2>Doctors</h2>
