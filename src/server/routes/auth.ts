@@ -3,13 +3,50 @@ import { sign } from "hono/jwt";
 import { eq } from "drizzle-orm";
 import type { AppEnv } from "../env";
 import { createDb } from "../db/client";
-import { users } from "../db/schema";
+import { users, loginAttempts } from "../db/schema";
 import { hashPassword, verifyPassword } from "../lib/password";
 import { authenticate } from "../middleware/auth";
 
 const auth = new Hono<AppEnv>();
 
 const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
+
+// Password checking is deliberately slow (PBKDF2, 100k iterations), which
+// helps offline cracking but does nothing to stop someone hammering the login
+// endpoint online. After this many consecutive failures for one email, further
+// attempts are refused for a while regardless of whether the password is right.
+const MAX_LOGIN_FAILURES = 8;
+const LOCKOUT_MINUTES = 15;
+
+async function isLockedOut(db: ReturnType<typeof createDb>, email: string) {
+  const row = await db.query.loginAttempts.findFirst({
+    where: eq(loginAttempts.identifier, email),
+  });
+  if (!row?.lockedUntil) return false;
+  return new Date(row.lockedUntil).getTime() > Date.now();
+}
+
+async function recordFailure(db: ReturnType<typeof createDb>, email: string) {
+  const row = await db.query.loginAttempts.findFirst({
+    where: eq(loginAttempts.identifier, email),
+  });
+  const failures = (row?.failures ?? 0) + 1;
+  const lockedUntil =
+    failures >= MAX_LOGIN_FAILURES
+      ? new Date(Date.now() + LOCKOUT_MINUTES * 60_000).toISOString()
+      : null;
+  await db
+    .insert(loginAttempts)
+    .values({ identifier: email, failures, lockedUntil })
+    .onConflictDoUpdate({
+      target: loginAttempts.identifier,
+      set: { failures, lockedUntil, updatedAt: new Date().toISOString() },
+    });
+}
+
+async function clearFailures(db: ReturnType<typeof createDb>, email: string) {
+  await db.delete(loginAttempts).where(eq(loginAttempts.identifier, email));
+}
 
 async function issueToken(
   c: { env: { JWT_SECRET: string } },
@@ -79,14 +116,26 @@ auth.post("/login", async (c) => {
   }
 
   const db = createDb(c.env.DB);
+
+  if (await isLockedOut(db, email)) {
+    return c.json(
+      { error: "Too many failed attempts. Please try again in a few minutes." },
+      429,
+    );
+  }
+
   const user = await db.query.users.findFirst({
     where: eq(users.email, email),
   });
 
   if (!user || !(await verifyPassword(password, user.passwordHash))) {
+    await recordFailure(db, email);
+    // Deliberately identical whether the account exists or not, so this
+    // endpoint can't be used to discover who is registered at the clinic.
     return c.json({ error: "Invalid email or password" }, 401);
   }
 
+  await clearFailures(db, email);
   const token = await issueToken(c, user);
   return c.json({
     token,

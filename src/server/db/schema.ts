@@ -222,6 +222,17 @@ export const llmUsage = sqliteTable("llm_usage", {
     .default(sql`(CURRENT_TIMESTAMP)`),
 });
 
+// Counts recent failed logins per identifier so credential-stuffing against
+// the login endpoint gets slowed down. Cleared on a successful login.
+export const loginAttempts = sqliteTable("login_attempts", {
+  identifier: text("identifier").primaryKey(), // lowercased email
+  failures: integer("failures").notNull().default(0),
+  lockedUntil: text("locked_until"),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(CURRENT_TIMESTAMP)`),
+});
+
 export const calendarConnections = sqliteTable(
   "calendar_connections",
   {

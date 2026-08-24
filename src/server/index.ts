@@ -14,7 +14,13 @@ import calendar from "./routes/calendar";
 const app = new Hono<AppEnv>();
 
 app.use("*", logger());
-app.use("/api/*", cors());
+// The frontend is served from this same Worker, so the API needs no
+// cross-origin access at all. Default cors() would answer every origin with
+// `*`; on an API serving health records that is a needlessly wide door, so
+// only the app's own origin is allowed.
+app.use("/api/*", (c, next) =>
+  cors({ origin: c.env.APP_BASE_URL ?? "*", credentials: false })(c, next),
+);
 
 app.get("/api/health", (c) => c.json({ status: "ok" }));
 
