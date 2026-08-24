@@ -11,6 +11,26 @@ import { notificationOutbox, users } from "../db/schema";
 
 const MAX_ATTEMPTS = 5;
 
+// RFC 2606 / RFC 6761 reserve these for documentation and testing — no
+// mailbox behind them can ever exist. Handing them to a provider guarantees
+// a hard bounce, and bounce rate is what gets a sending account throttled or
+// suspended, so demo data must never cost real sender reputation.
+const UNDELIVERABLE_SUFFIXES = [
+  ".test",
+  ".example",
+  ".invalid",
+  ".localhost",
+  "@localhost",
+  "@example.com",
+  "@example.org",
+  "@example.net",
+];
+
+export function isUndeliverableAddress(email: string): boolean {
+  const address = email.trim().toLowerCase();
+  return UNDELIVERABLE_SUFFIXES.some((suffix) => address.endsWith(suffix));
+}
+
 export type NotificationType =
   | "booking_confirmation"
   | "appointment_reminder"
@@ -101,6 +121,18 @@ export async function processOutbox(env: Bindings, db: Db, limit = 25) {
     .limit(limit);
 
   for (const item of due) {
+    if (isUndeliverableAddress(item.email)) {
+      console.info(`[email:skipped] ${item.email} is a reserved test address`);
+      await db
+        .update(notificationOutbox)
+        .set({
+          status: "skipped",
+          lastError: "Recipient uses a reserved test domain that cannot receive mail",
+        })
+        .where(eq(notificationOutbox.id, item.id));
+      continue;
+    }
+
     const result = await sendViaSendGrid(env, item.email, item.subject, item.body);
     if (result.ok) {
       await db

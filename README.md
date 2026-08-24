@@ -214,6 +214,7 @@ All routes are prefixed `/api`. Authenticated routes take `Authorization: Bearer
 | `POST /doctors/:id/leave` | `{ date, reason? }` → records leave, cancels affected held/confirmed bookings, notifies patients and the doctor |
 | `GET /llm-usage` | Today's LLM call count against the self-imposed daily cap |
 | `GET /notifications` | The notification outbox — every message queued, its delivery status, attempts and last error |
+| `POST /run-jobs` | Runs the cron jobs on demand (hold sweep, reminders, outbox flush) instead of waiting for the next 15-minute tick |
 
 ### Calendar (`/api/calendar`)
 | Method & path | Description |
@@ -227,7 +228,9 @@ All routes are prefixed `/api`. Authenticated routes take `Authorization: Bearer
 
 `SENDGRID_API_KEY` is optional. Without it, notifications are still queued, scheduled, retried and status-tracked exactly as they would be — they're just logged instead of delivered. The **admin dashboard → Notifications** panel (and `GET /api/admin/notifications`) shows the outbox, so the notification logic is verifiable without configuring any provider.
 
-To send for real: SendGrid's **Single Sender Verification** works without owning a domain — verify one from-address, create an API key with Mail Send permission, then `wrangler secret put SENDGRID_API_KEY` and `wrangler secret put EMAIL_FROM`.
+To send for real: SendGrid's **Single Sender Verification** works without owning a domain — verify one from-address, create an API key with Mail Send permission, then `wrangler secret put SENDGRID_API_KEY` and `wrangler secret put EMAIL_FROM` (which must match the verified address exactly, or sends are rejected with a 403).
+
+Addresses on reserved domains (`.test`, `.example`, `.invalid`, `localhost`, `example.com`) are deliberately **skipped** rather than sent. The seeded demo accounts use `@demo.test`, and handing those to a provider would guarantee hard bounces — bounce rate is what gets a young sending account throttled. They appear in the outbox as `skipped` with the reason recorded.
 
 ## Background jobs
 

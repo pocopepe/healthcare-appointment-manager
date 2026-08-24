@@ -14,6 +14,7 @@ import { authenticate, requireRole } from "../middleware/auth";
 import { hashPassword } from "../lib/password";
 import { cancelAppointmentAndNotify } from "../lib/appointment-notifications";
 import { getUsageToday } from "../lib/llm";
+import { runScheduledTasks } from "../lib/scheduler";
 
 const admin = new Hono<AppEnv>();
 admin.use("*", authenticate, requireRole("admin"));
@@ -64,6 +65,15 @@ admin.get("/notifications", async (c) => {
     deliveryEnabled: Boolean(c.env.SENDGRID_API_KEY),
     notifications: rows,
   });
+});
+
+// Runs the same jobs the 15-minute Cron Trigger runs. Handy for demoing
+// (and debugging) without waiting for the next tick — the jobs are idempotent,
+// so running them early just does the work sooner.
+admin.post("/run-jobs", async (c) => {
+  const db = createDb(c.env.DB);
+  await runScheduledTasks(c.env, db);
+  return c.json({ ok: true, ranAt: new Date().toISOString() });
 });
 
 admin.get("/doctors", async (c) => {

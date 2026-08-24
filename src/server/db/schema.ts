@@ -188,7 +188,9 @@ export const notificationOutbox = sqliteTable(
     subject: text("subject").notNull(),
     body: text("body").notNull(),
     status: text("status", {
-      enum: ["pending", "sent", "failed"],
+      // "skipped" = deliberately not delivered (a placeholder recipient
+      // address that can never receive mail), as opposed to "failed".
+      enum: ["pending", "sent", "failed", "skipped"],
     })
       .notNull()
       .default("pending"),
